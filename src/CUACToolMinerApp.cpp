@@ -2,6 +2,7 @@
 #include <nanodbc/nanodbc.h>
 
 #include <iostream>
+#include <fstream>
 #include <vector>
 
 using namespace std;
@@ -14,9 +15,19 @@ const string main_db_name = "CUACTool-Rev2-0-0.accdb";
 const string lookup_db_name = "CUACTool_LookupTables.accdb";
 
 const string output_path = "C:/Users/Phil Ahrenkiel/Documents/Development/SAC";
-const string output_filename = "project_data.csv";
+//const string output_filename = "project_data.csv";
 
-bool quiet = true;
+std::vector<string> tables_to_export = {"tProjects", "tVersion", "tInputApt", "tInput CECPV", "tVNM"};
+
+bool quiet = false;
+
+string fix_sql_string(const string &sIn)
+{
+    string sOut = sIn;
+    if (sOut.find(" ") != std::string::npos)
+        sOut = "[" + sOut + "]";
+    return sOut;
+}
 
 void read_cats(connection &conn, std::list<string> &cats)
 {
@@ -48,10 +59,10 @@ void read_table_catalog(connection &conn, const string &sTable_name)
     }
 }
 
-bool read_col_names(connection &conn, const string &sTable_name, std::vector<string> &col_names)
+bool read_col_names(connection &conn, string sTable_name, std::vector<string> &col_names)
 {
     try{
-
+        sTable_name = fix_sql_string(sTable_name);
         string command = "SELECT * FROM " + sTable_name;
         result data = execute(conn, NANODBC_TEXT(command));
 
@@ -71,8 +82,11 @@ bool read_col_names(connection &conn, const string &sTable_name, std::vector<str
 }
 
 template <typename T>
-void read_rows_from_col(connection &conn, const string &sTable_name, const string &sCol_name, std::vector<T> &rows)
+void read_rows_from_col(connection &conn, string sTable_name, string sCol_name, std::vector<T> &rows)
 {
+    sCol_name = fix_sql_string(sCol_name);
+    sTable_name = fix_sql_string(sTable_name);
+
     string command = "SELECT " + sCol_name + " FROM " + sTable_name;
     result row = execute(conn, NANODBC_TEXT(command));
     for (int i = 1; row.next(); ++i)
@@ -104,7 +118,7 @@ int getProjectList(string sDBPathFilename, vector<string>& vsProjects)
         auto name = conn.dbms_name();
         if (!quiet) std::cout << "Connection to " << name << " database named " << sDBPathFilename << "\n";
 
-        read_rows_from_col(conn, "tProjects", "[Project Name]", vsProjects);
+        read_rows_from_col(conn, "tProjects", "Project Name", vsProjects);
         res = static_cast<int>(vsProjects.size());
     }
     catch (database_error const& e)
@@ -136,65 +150,79 @@ int getTableNames(string sDBPathFilename, vector<string>& vsTables)
     return res;
 }
 
-int getTableProjectData(connection &conn, const string &sTable_name, const long project_key)
+int getTableProjectData(const string &sDBPathFilename, const string &sTable_name,const string &sProjDataPathFilename, const long project_key)
 {
-    bool has_projID(false);
-    std::vector<string> col_names;
-    if (read_col_names(conn, sTable_name, col_names)) {
-        for (auto &sCol: col_names)
-        {
-            if (sCol == "ProjectID")
-            {
-                has_projID = true;
-            }
-        }
-        if (!has_projID)
-            return false;
+    try
+    {
+        string full_arg = "Driver={Microsoft Access Driver (*.mdb, *.accdb)};Dbq=" + sDBPathFilename + ";";
+        auto const connection_string = NANODBC_TEXT(full_arg);
+        connection conn(connection_string);
 
-        std::cout << "Table: " << sTable_name << std::endl;
-        bool first = true;
-        for (auto &sCol: col_names) {
-            if (!first) {
-                std::cout << ", ";
-                }
-            std::cout << sCol;
-            first = false;
-            }
-        std::cout << std::endl;
-        vector<string> vsKey;
-        read_rows_from_col(conn, sTable_name, "ProjectID", vsKey);
-        long iKey(0);
-        first = true;
-        for (auto &sKey: vsKey) 
-        {
-            if (sKey == "")
-                continue;
-            long keyp = std::stoi(sKey);
-            if (keyp == project_key)
+        bool has_projID(false);
+        std::vector<string> col_names;
+        if (read_col_names(conn, sTable_name, col_names)) {
+            for (auto &sCol: col_names)
             {
-                std::vector<string> sData;
-                for (auto &sCol: col_names)
+                if (sCol == "ProjectID")
                 {
-                    if (sCol != "ProjectID")
-                    {
-                        std::vector<string> sColData;
-                        read_rows_from_col(conn, sTable_name, sCol, sColData);
-                        if (!first) std::cout << ", ";
-                        std::cout << sColData[iKey];
-                        first = false;
-                    }
-
+                    has_projID = true;
                 }
-                std::cout << std::endl;
             }
+            if (!has_projID)
+                return 0;
 
+            if (!quiet) std::cout << std::endl;
+            if (!quiet) std::cout << "Table: " << sTable_name << std::endl;
+            bool first = true;
+            for (auto &sCol: col_names) {
+                if (sCol != "ProjectID")
+                {
+                    if (!first) {
+                        if (!quiet) std::cout << ", ";
+                        }
+                    if (!quiet) std::cout << sCol;
+                    first = false;
+                }
+            }
+            if (!quiet) std::cout << std::endl;
+            vector<string> vsKey;
+            read_rows_from_col(conn, sTable_name, "ProjectID", vsKey);
+            long iKey(0);
+            first = true;
+            for (auto &sKey: vsKey) 
+            {
+                if (sKey == "")
+                    continue;
+                long keyp = std::stoi(sKey);
+                if (keyp == project_key)
+                {
+                    std::vector<string> sData;
+                    for (auto &sCol: col_names)
+                    {
+                        if (sCol != "ProjectID")
+                        {
+                            std::vector<string> sColData;
+                            read_rows_from_col(conn, sTable_name, sCol, sColData);
+                            if (!first && !quiet) std::cout << ", ";
+                            if (!quiet) std::cout << sColData[iKey];
+                            first = false;
+                        }
+
+                    }
+                    if (!quiet) std::cout << std::endl;
+                }
+
+            }
         }
     }
-    std::cout << std::endl;
-    return true;
+    catch (database_error const& e)
+    {
+        return static_cast<int>(e.native());
+    }
+    return 0;
  }
 
-    int getProjectData(string sDBPathFilename, string sProjectName, string sProjDataPathFilename)
+bool getProjectID(const string& sDBPathFilename,const string &sProjectName, long &project_key)
 {
     int res = 0;
     try
@@ -210,7 +238,7 @@ int getTableProjectData(connection &conn, const string &sTable_name, const long 
         read_col_names(conn, "tProjects", vsCols);
   
         vector<string> vsProjects;
-        read_rows_from_col(conn, "tProjects", "[Project Name]", vsProjects);
+        read_rows_from_col(conn, "tProjects", "Project Name", vsProjects);
         long iKey = 0;
         bool found = false;
         for (auto &project: vsProjects) 
@@ -222,36 +250,44 @@ int getTableProjectData(connection &conn, const string &sTable_name, const long 
             }
             ++iKey;
         }
-
-        if (!found) {return -1;}
+        if (!found) {return false;}
 
         vector<string> vsKey;
         read_rows_from_col(conn, "tProjects", "ProjectID", vsKey);
-        long project_key = std::stoi(vsKey[iKey]);
+        project_key = std::stoi(vsKey[iKey]);
  
         if (!quiet) std::cout << "Key for " << sProjectName << " is " << project_key << std::endl;
-
-        // Sweep through tables to read data associated with key
-        vector<string> vsTables;
-        getTableNames(sDBPathFilename, vsTables);
-        for (auto &sTable: vsTables)
-        {
-            bool has_project = getTableProjectData(conn, sTable, project_key);
-        }
     }
     catch (database_error const& e)
     {
-        res = static_cast<int>(e.native());
+       return false;
     };
-    return res;
+    return true;
+}
+
+int getProjectData(const string& sDBPathFilename,const string &sProjectName, const string &sProjDataPath)
+{
+    int res = 0;
+    long project_key(-1);
+    if (!getProjectID(sDBPathFilename, sProjectName, project_key))
+        return -1;
+
+    int err = 0;
+    for (auto sTable_name: tables_to_export) {
+        string sProjDataPathFilename = sProjectName + "/" + sTable_name + ".csv";
+        err = getTableProjectData(sDBPathFilename, sTable_name, sProjDataPathFilename, project_key);
+        if (err != 0)
+            break;
+    }
+    return err;
 }
 
 int main(int /*argc*/, char* /*argv*/[])
 {
     string sDBPathFilename = db_folder + "/" + main_db_name;
 
-    quiet = true;
-
+    quiet = false;
+    /*
     int res = 0;
     try
     {
@@ -267,22 +303,9 @@ int main(int /*argc*/, char* /*argv*/[])
     {
         res = static_cast<int>(e.native());
     };
-
-    /*
-    vector<string> vsTables;
-    auto res = getTableNames(sDBPathFilename, vsTables);
-    if (res < 0)
-        cout << "Error: " << res <<std::endl;
-    else
-    {
-        cout << "Table names:" << std::endl;
-        for (auto& table : vsTables)
-            cout << table << std::endl;
-    }
-    cout << std::endl;
     */
     vector<string> vsProjects;
-    res = getProjectList(sDBPathFilename, vsProjects);
+    auto res = getProjectList(sDBPathFilename, vsProjects);
     if (res < 0)
         std::cout << "Error: " << res <<std::endl;
     else
@@ -293,11 +316,12 @@ int main(int /*argc*/, char* /*argv*/[])
     }
     std::cout << std::endl;
 
-    string sProjDataPathFilename = output_path + "/" + output_filename;
-    res = getProjectData(sDBPathFilename, "Lo Rev", sProjDataPathFilename);
+    res = getProjectData(sDBPathFilename, "Lo Rev", output_path);
     if (res < 0)
         std::cout << "Error: " << res <<std::endl;
     else
-        std::cout << "Successfully wrote file " << sProjDataPathFilename << std::endl;
+        std::cout << "Successfully wrote data." << std::endl;
+
+
 
 }
