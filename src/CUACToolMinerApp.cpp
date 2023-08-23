@@ -4,22 +4,23 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
+#include <filesystem>
 
 using namespace std;
 
 using namespace nanodbc;
 
-const string db_folder = "C:/Users/Phil Ahrenkiel/Documents/Development/SAC/CUACTool-Rev2-0-0 2";
-const string main_db_name = "CUACTool-Rev2-0-0.accdb";
-//const string main_db_name = "error.accdb";
-const string lookup_db_name = "CUACTool_LookupTables.accdb";
+const string db_folder("C:/Users/Phil Ahrenkiel/Documents/Development/SAC/CUACTool-Rev2-0-0 2");
+const string main_db_name("CUACTool-Rev2-0-0.accdb");
+const string lookup_db_name("CUACTool_LookupTables.accdb");
 
-const string output_path = "C:/Users/Phil Ahrenkiel/Documents/Development/SAC";
-//const string output_filename = "project_data.csv";
+const string output_path("C:/Users/Phil Ahrenkiel/Documents/Development/SAC");
+std::vector<string> tables_to_export({"tProjects", "tVersion", "tInputApt", "tInputCECPV", "tVNM"});
 
-std::vector<string> tables_to_export = {"tProjects", "tVersion", "tInputApt", "tInput CECPV", "tVNM"};
+const string project_name("Lo Project");
 
-bool quiet = false;
+bool quiet(false);
+namespace fs = std::filesystem;
 
 string fix_sql_string(const string &sIn)
 {
@@ -158,8 +159,14 @@ int getTableProjectData(const string &sDBPathFilename, const string &sTable_name
         auto const connection_string = NANODBC_TEXT(full_arg);
         connection conn(connection_string);
 
+        if (!quiet) std::cout << std::endl << std::endl;
+        if (!quiet) std::cout << "Table: " << sTable_name << std::endl;
+
         bool has_projID(false);
+        std::vector<std::vector<string>> sTable;
+        
         std::vector<string> col_names;
+        std::vector<string> sRow;
         if (read_col_names(conn, sTable_name, col_names)) {
             for (auto &sCol: col_names)
             {
@@ -167,53 +174,79 @@ int getTableProjectData(const string &sDBPathFilename, const string &sTable_name
                 {
                     has_projID = true;
                 }
+                else
+                   sRow.push_back(sCol);
             }
-            if (!has_projID)
-                return 0;
+            if (has_projID)
+            {
+                sTable.push_back(sRow); // column labels
 
-            if (!quiet) std::cout << std::endl;
-            if (!quiet) std::cout << "Table: " << sTable_name << std::endl;
-            bool first = true;
-            for (auto &sCol: col_names) {
-                if (sCol != "ProjectID")
+                vector<string> vsKey;
+                read_rows_from_col(conn, sTable_name, "ProjectID", vsKey);
+
+                // Display rows referring to project_key
+                long iKey(0);
+                bool first(true);
+                for (auto &sKey: vsKey) 
                 {
-                    if (!first) {
-                        if (!quiet) std::cout << ", ";
+                    if (sKey != "")
+                    {
+                        long keyp = std::stoi(sKey);
+                        if (keyp == project_key)
+                        {
+                            sRow.clear();
+                            for (auto &sCol: col_names)
+                            {
+                                if (sCol != "ProjectID")
+                                {
+                                    std::vector<string> sColData;
+                                    read_rows_from_col(conn, sTable_name, sCol, sColData);
+                                    auto sEntry = sColData[iKey]; 
+                                    sRow.push_back(sEntry);
+                                    first = false;
+                                }
+
+                            }
+                            sTable.push_back(sRow);
                         }
+                    }
+                    ++iKey;
+                }
+            }
+            else
+            {
+                if (!quiet) std::cout << "No related entries." << std::endl;
+            }
+        }
+        else
+        {
+            if (!quiet) std::cout << "Table not found." << std::endl;
+            return 1;
+        }
+
+        // Write data
+        if (has_projID)
+        {
+            ofstream outfile;
+            outfile.open(sProjDataPathFilename);
+            for (auto &sRow: sTable)
+            {
+                bool first(true);
+                for (auto &sCol: sRow)
+                {
+                    if (!first)
+                    {   outfile << ",";                   
+                        if (!quiet) std::cout << ", ";
+                    }
+                    outfile << sCol;
                     if (!quiet) std::cout << sCol;
                     first = false;
                 }
+                outfile << std::endl;
+                std::cout << std::endl;
             }
-            if (!quiet) std::cout << std::endl;
-            vector<string> vsKey;
-            read_rows_from_col(conn, sTable_name, "ProjectID", vsKey);
-            long iKey(0);
-            first = true;
-            for (auto &sKey: vsKey) 
-            {
-                if (sKey == "")
-                    continue;
-                long keyp = std::stoi(sKey);
-                if (keyp == project_key)
-                {
-                    std::vector<string> sData;
-                    for (auto &sCol: col_names)
-                    {
-                        if (sCol != "ProjectID")
-                        {
-                            std::vector<string> sColData;
-                            read_rows_from_col(conn, sTable_name, sCol, sColData);
-                            if (!first && !quiet) std::cout << ", ";
-                            if (!quiet) std::cout << sColData[iKey];
-                            first = false;
-                        }
-
-                    }
-                    if (!quiet) std::cout << std::endl;
-                }
-
-            }
-        }
+            outfile.close();
+        }      
     }
     catch (database_error const& e)
     {
@@ -267,17 +300,28 @@ bool getProjectID(const string& sDBPathFilename,const string &sProjectName, long
 
 int getProjectData(const string& sDBPathFilename,const string &sProjectName, const string &sProjDataPath)
 {
-    int res = 0;
     long project_key(-1);
     if (!getProjectID(sDBPathFilename, sProjectName, project_key))
         return -1;
 
+    auto sProjectPath = output_path + "/" + sProjectName;
+    std::error_code ec;
     int err = 0;
-    for (auto sTable_name: tables_to_export) {
-        string sProjDataPathFilename = sProjectName + "/" + sTable_name + ".csv";
-        err = getTableProjectData(sDBPathFilename, sTable_name, sProjDataPathFilename, project_key);
-        if (err != 0)
-            break;
+    auto res = fs::create_directory(sProjectPath, ec);
+    if (ec)
+    {
+        std::cout << "Error creating/finding directory: " << ec.message() << std::endl;
+        err = ec.value();
+    }
+    else
+    {
+        for (auto sTable_name: tables_to_export)
+        {
+            string sProjDataPathFilename = sProjectPath + "/" + sTable_name + ".csv";
+            err = getTableProjectData(sDBPathFilename, sTable_name, sProjDataPathFilename, project_key);
+            if (err != 0)
+                break;
+        }
     }
     return err;
 }
@@ -316,11 +360,13 @@ int main(int /*argc*/, char* /*argv*/[])
     }
     std::cout << std::endl;
 
-    res = getProjectData(sDBPathFilename, "Lo Rev", output_path);
+    res = getProjectData(sDBPathFilename, project_name, output_path);
+
+    std::cout << std::endl;
     if (res < 0)
         std::cout << "Error: " << res <<std::endl;
     else
-        std::cout << "Successfully wrote data." << std::endl;
+        std::cout << "No errors." << std::endl;
 
 
 
