@@ -22,3 +22,6 @@ if (${PROJECT_NAME}_BUILD_TESTING AND NOT TARGET gtest)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/googletest)
 
 endif ()
+
+# nanodbc
+add_subdirectory(nanodbc)

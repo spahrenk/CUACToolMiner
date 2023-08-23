@@ -23,6 +23,15 @@ target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_17)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE fmt)
 
+target_link_libraries(${PROJECT_NAME} PRIVATE nanodbc)
+
+set(headers
+)
+
+set(source
+  CUACToolMinerApp.cpp
+)
+
 include(GenerateExportHeader)
 generate_export_header(${PROJECT_NAME})
 
